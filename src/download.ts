@@ -59,6 +59,7 @@ async function downloadFromS3() {
       yamlStreamPassThrough,
     ]);
 
+    // Create a write stream for the SFTP CSV output
     const sftpCsvOutput = createWriteStream("downloaded_sftp_output.csv");
     const sftpReadableStream = sftp.createReadStream("output.csv.gz");
 

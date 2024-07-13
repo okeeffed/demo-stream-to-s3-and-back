@@ -16,10 +16,10 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 ## Process
 
 1. `npx cdk init app --language typescript`
-2. `npm i @aws-sdk/client-s3 @aws-sdk/lib-storage fast-csv`
+2. `npm i @aws-sdk/client-s3 @aws-sdk/lib-storage fast-csv  ssh2-sftp-client yaml`
 3. `npm i --save-dev tsx`
 4. `mkdir src`
-5. `touch src/upload.ts src/download.ts input.json`
+5. `touch src/upload.ts src/download.ts src/demultiplex.ts`
 
 ### Creating a SSH key
 
