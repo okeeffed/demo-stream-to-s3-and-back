@@ -1,50 +1,24 @@
-import { createWriteStream } from "node:fs";
+import { createWriteStream, readFileSync } from "node:fs";
 import { parse } from "fast-csv";
 import { createGunzip } from "node:zlib";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-import { Duplex, PassThrough, Readable, Transform } from "node:stream";
+import { PassThrough, Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { stringify } from "yaml";
+import { Demultiplexer } from "./demultiplexer";
+import * as path from "node:path";
+import Client = require("ssh2-sftp-client");
 
+const BUCKET_NAME = "stream-to-s3-and-back";
+const sftp = new Client();
 const s3Client = new S3Client();
 
-/**
- * We create a demultiplexer to write out to two different
- * streams.
- *
- * 1. To handle writing the CSV file.
- * 2. To handle writing the JSON file.
- *
- * Reading is handled by the pipeline implementation.
- */
-class Demultiplexer extends Duplex {
-  private outputStreams: PassThrough[];
-
-  constructor(outputStreams: PassThrough[]) {
-    super({
-      objectMode: true,
-    });
-    this.outputStreams = outputStreams;
-  }
-
-  _write(
-    chunk: any,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void
-  ): void {
-    for (const outputStream of this.outputStreams) {
-      outputStream.write(chunk);
-    }
-    callback();
-  }
-
-  _final(callback: (error?: Error | null) => void): void {
-    for (const outputStream of this.outputStreams) {
-      outputStream.end();
-    }
-    callback();
-  }
-}
+const config = {
+  host: "cdk-output.server.transfer.ap-southeast-2.amazonaws.com",
+  port: 22,
+  username: "testuser",
+  privateKey: readFileSync(path.join(__dirname, "../sftp_key")),
+};
 
 const yamlTransformStream = new Transform({
   objectMode: true,
@@ -56,14 +30,17 @@ const yamlTransformStream = new Transform({
 
 async function downloadFromS3() {
   try {
-    const { Body } = await s3Client.send(
+    await sftp.connect(config);
+    console.log("SFTP connected successfully");
+
+    const { Body: s3UploadBody } = await s3Client.send(
       new GetObjectCommand({
-        Bucket: "stream-to-s3-and-back",
+        Bucket: BUCKET_NAME,
         Key: "output.csv.gz",
       })
     );
 
-    if (Body instanceof Readable === false) {
+    if (s3UploadBody instanceof Readable === false) {
       throw new Error("S3 object body is not a readable stream");
     }
 
@@ -82,9 +59,13 @@ async function downloadFromS3() {
       yamlStreamPassThrough,
     ]);
 
+    const sftpCsvOutput = createWriteStream("downloaded_sftp_output.csv");
+    const sftpReadableStream = sftp.createReadStream("output.csv.gz");
+
     // Buffer everything into the demux stream
     await Promise.all([
-      pipeline(Body, createGunzip(), demux),
+      // S3 download streams
+      pipeline(s3UploadBody, createGunzip(), demux),
       pipeline(csvStreamPassThrough, csvOutput),
       pipeline(
         yamlStreamPassThrough,
@@ -92,7 +73,11 @@ async function downloadFromS3() {
         yamlTransformStream,
         yamlOutput
       ),
+      // SFTP download stream
+      pipeline(sftpReadableStream, createGunzip(), sftpCsvOutput),
     ]);
+
+    await sftp.end();
 
     console.log("File downloaded, decompressed, and processed successfully");
   } catch (error) {
